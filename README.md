@@ -14,9 +14,19 @@ rule engine) → Report (in-app table + Excel export)
 ```bash
 pip install -r requirements.txt
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# edit secrets.toml and add your real OPENROUTER_API_KEY
+# edit secrets.toml and add your real OPENROUTER_API_KEY, SUPABASE_URL, SUPABASE_KEY
 streamlit run app.py
 ```
+
+## Supabase setup (one-time)
+1. Create a project at supabase.com
+2. Go to **Project Settings → API**, copy the **Project URL** and the
+   **anon/public** key (not `service_role` — never use that one here)
+3. Go to **SQL Editor → New Query**, paste the contents of
+   `supabase_schema.sql`, and run it once — this creates the `batches`
+   and `operations` tables with permissive RLS policies (fine for a
+   single-user internal tool; tighten before wider use)
+4. Add `SUPABASE_URL` and `SUPABASE_KEY` to your secrets (see above)
 
 ## Deploy to Streamlit Community Cloud
 1. Push this repo to GitHub (private recommended)
@@ -29,7 +39,9 @@ streamlit run app.py
 
 ## Current MVP scope
 - One master spec (`data/master_specs/sample_product_A.json`)
-- One page at a time (upload or camera), operations accumulate across pages in-session
+- One page at a time (upload or camera); operations persist to Supabase
+  keyed by batch number, so they accumulate across pages AND across
+  sessions/days for the same batch
 - Whole-page extraction (single vision call, structured JSON response)
 - Numeric range check + text/vocabulary match
 - ALCOA checks:
@@ -49,9 +61,11 @@ streamlit run app.py
 - Per-field cropping for higher extraction precision
 - Unit conversion (°F↔°C, mL↔L, etc.)
 - Fuzzy text matching for handwriting variants
-- Batch/multi-page processing (currently accumulates operations in Streamlit session state, not persisted)
+- Batch/multi-page processing UI polish (works, but no batch list/browse view yet)
+- Cross-batch chronology check (same operator, overlapping time, different batches) — `storage.load_operations_by_operator()` exists but isn't wired into the UI yet
 - Model fallback chain testing at scale (router supports it, needs live validation)
 - "Original" ALCOA pillar — overwrite/correction detection on raw images
+- Tightening Supabase RLS policies if this moves beyond single-user use
 
 ## Repo structure
 ```

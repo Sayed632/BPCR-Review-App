@@ -2,6 +2,8 @@
 app.py
 BPCR Review App — MVP
 Capture -> Preprocess -> Extract -> Compare -> Report
+Operations persist to Supabase, keyed by batch number, so ALCOA checks
+work across pages AND across sessions/days — not just within one run.
 """
 
 import json
@@ -14,6 +16,7 @@ from core.comparator import evaluate_field
 from core.report_builder import build_report_df
 from core.chronology_checker import check_chronology
 from core.material_reconciler import reconcile_materials
+from core.storage import ensure_batch, save_operations, load_operations
 from ui.upload_view import get_bpcr_page
 from ui.review_view import show_report
 from ui.alcoa_view import show_chronology, show_reconciliation
@@ -35,13 +38,22 @@ st.info(
     f"({len(spec['parameters'])} parameters, {len(spec.get('operations', []))} operations)"
 )
 
-if "all_operations" not in st.session_state:
-    st.session_state["all_operations"] = {}  # keyed by operation_id, accumulates across pages
+batch_number = st.text_input(
+    "Batch Number",
+    placeholder="e.g. B-2026-0142",
+    help="Groups all pages/operations for this batch. Use the same batch "
+    "number across sessions to keep building the same record.",
+)
 
 st.caption(
     "BPCRs span multiple pages. Process each page as you capture it — "
-    "operations and ALCOA checks accumulate across pages in this session."
+    "operations and ALCOA checks accumulate across pages and sessions "
+    "for this batch number."
 )
+
+if not batch_number:
+    st.warning("Enter a batch number above to begin.")
+    st.stop()
 
 image_bytes = get_bpcr_page()
 
@@ -68,29 +80,28 @@ if image_bytes:
         df = build_report_df(evaluated_rows)
         st.session_state["report_df"] = df
 
-        # Merge operation data into the cross-page accumulator.
-        # Only overwrite an existing entry if this page actually had real data
-        # for it (avoids a later page's BLANK wiping out an earlier real reading).
-        for op in operation_extractions:
-            op_id = op["operation_id"]
-            has_data = op.get("operator") not in (None, "BLANK") or op.get(
-                "timestamp"
-            ) not in (None, "BLANK")
-            if op_id not in st.session_state["all_operations"] or has_data:
-                st.session_state["all_operations"][op_id] = op
+        with st.spinner("Saving to database..."):
+            ensure_batch(batch_number, spec["product_name"], spec.get("bpcr_version"))
+            # Only persist operations that actually have data on this page -
+            # avoids overwriting a real reading from an earlier page with
+            # this page's BLANK for the same operation_id.
+            ops_with_data = [
+                op
+                for op in operation_extractions
+                if op.get("operator") not in (None, "BLANK")
+                or op.get("timestamp") not in (None, "BLANK")
+            ]
+            save_operations(batch_number, ops_with_data)
 
 if "report_df" in st.session_state:
     show_report(st.session_state["report_df"])
 
-if st.session_state["all_operations"]:
+all_ops = load_operations(batch_number)
+
+if all_ops:
     st.divider()
     st.header("ALCOA Data Integrity Checks")
-    st.caption(
-        f"Based on {len(st.session_state['all_operations'])} operation(s) "
-        "captured so far this session."
-    )
-
-    all_ops = list(st.session_state["all_operations"].values())
+    st.caption(f"Based on {len(all_ops)} operation(s) saved for batch **{batch_number}**.")
 
     chronology_result = check_chronology(all_ops)
     show_chronology(chronology_result)
