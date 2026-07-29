@@ -29,32 +29,46 @@ streamlit run app.py
 
 ## Current MVP scope
 - One master spec (`data/master_specs/sample_product_A.json`)
-- One page at a time (upload or camera)
+- One page at a time (upload or camera), operations accumulate across pages in-session
 - Whole-page extraction (single vision call, structured JSON response)
 - Numeric range check + text/vocabulary match
+- ALCOA checks:
+  - **Chronology/attributability**: flags an operator recorded at identical timestamps across different operations (physically impossible)
+  - **Material reconciliation**: sums quantity used per material across operations, compares to quantity indented within a loss tolerance
 - Excel export of results
+
+## ALCOA coverage
+- **Accurate** — range/text comparator
+- **Legible** — ILLEGIBLE flag on extraction
+- **Attributable** — operator captured per operation; chronology conflicts surface attribution problems
+- **Contemporaneous** — timestamp sequence check (chronology_checker.py)
+- **Original** — not yet built; would need visual overwrite/correction detection on the raw image, beyond transcription
 
 ## Not yet built (post-MVP)
 - Multi-product spec selection
 - Per-field cropping for higher extraction precision
 - Unit conversion (°F↔°C, mL↔L, etc.)
 - Fuzzy text matching for handwriting variants
-- Batch/multi-page processing
+- Batch/multi-page processing (currently accumulates operations in Streamlit session state, not persisted)
 - Model fallback chain testing at scale (router supports it, needs live validation)
+- "Original" ALCOA pillar — overwrite/correction detection on raw images
 
 ## Repo structure
 ```
 app.py                  Main Streamlit entry point
 config/settings.py      Constants + secrets access
 core/
-  model_router.py       OpenRouter calls with model fallback chain
-  preprocessor.py        Deskew + contrast enhancement
-  extractor.py           Prompt building + vision extraction
+  model_router.py         OpenRouter calls with model fallback chain
+  preprocessor.py         Deskew + contrast enhancement
+  extractor.py            Prompt building + vision extraction (fields + operations)
   comparator.py           Spec comparison rule engine
   report_builder.py       Observation table + Excel export
+  chronology_checker.py   ALCOA attributability/contemporaneous check
+  material_reconciler.py  ALCOA material quantity reconciliation
 ui/
   upload_view.py          File upload / camera capture
   review_view.py          Results table + export button
+  alcoa_view.py           Chronology conflicts + reconciliation display
 data/master_specs/        Digitized BPCR specs (JSON)
 tests/                     Unit tests
 ```

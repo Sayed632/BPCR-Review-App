@@ -49,5 +49,62 @@
       "expected_type": "text",
       "allowed_values": ["Compliant", "Not Compliant"]
     }
+  ],
+  "operations": [
+    {
+      "operation_id": "OP-01",
+      "description": "Charging of Chemical A - Stage 1",
+      "page_no": 2,
+      "material_used": "Chemical A",
+      "qty_unit": "kg",
+      "requires_operator": true,
+      "requires_timestamp": true,
+      "requires_qty": true
+    },
+    {
+      "operation_id": "OP-02",
+      "description": "Granulation",
+      "page_no": 3,
+      "material_used": null,
+      "requires_operator": true,
+      "requires_timestamp": true,
+      "requires_qty": false
+    },
+    {
+      "operation_id": "OP-03",
+      "description": "Blending",
+      "page_no": 4,
+      "material_used": null,
+      "requires_operator": true,
+      "requires_timestamp": true,
+      "requires_qty": false
+    },
+    {
+      "operation_id": "OP-04",
+      "description": "Charging of Chemical A - Stage 2",
+      "page_no": 5,
+      "material_used": "Chemical A",
+      "qty_unit": "kg",
+      "requires_operator": true,
+      "requires_timestamp": true,
+      "requires_qty": true
+    },
+    {
+      "operation_id": "OP-05",
+      "description": "Compression",
+      "page_no": 7,
+      "material_used": null,
+      "requires_operator": true,
+      "requires_timestamp": true,
+      "requires_qty": false
+    }
+  ],
+  "materials": [
+    {
+      "material": "Chemical A",
+      "qty_indented": 100,
+      "unit": "kg",
+      "loss_tolerance_pct": 2
+    }
   ]
 }

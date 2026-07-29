@@ -68,6 +68,108 @@ def _build_whole_page_prompt(parameters: list) -> str:
     )
 
 
+def _build_operations_prompt(operations: list) -> str:
+    op_list = "\n".join(
+        f"- Operation \"{op['operation_id']}\" ({op['description']}): "
+        f"needs operator name/initials={op.get('requires_operator', True)}, "
+        f"needs timestamp={op.get('requires_timestamp', True)}, "
+        f"needs quantity used (unit: {op.get('qty_unit', 'n/a')})="
+        f"{op.get('requires_qty', False)}"
+        for op in operations
+    )
+    return (
+        "This image is a page from an executed pharmaceutical batch production "
+        "control record. For data-integrity review, extract the following for "
+        "each operation listed below, if present on this page:\n\n"
+        f"{op_list}\n\n"
+        "For each operation, extract:\n"
+        "- operator: the handwritten name/initials/signature of who performed it "
+        "(or 'BLANK'/'ILLEGIBLE')\n"
+        "- timestamp: the handwritten date and/or time recorded for that "
+        "operation, transcribed exactly as written (e.g. '12-03-2026 10:00 AM'). "
+        "Use 'BLANK' or 'ILLEGIBLE' if not readable.\n"
+        "- qty_used: the handwritten quantity used, if this operation requires "
+        "one, else null.\n\n"
+        "Respond with ONLY a JSON array, one object per operation, in this exact "
+        "form:\n"
+        '[{"operation_id": "OP-01", "operator": "<value>", "timestamp": "<value>", '
+        '"qty_used": "<value or null>"}]\n'
+        "No other text, no markdown code fences, just the raw JSON array. If an "
+        "operation is not visible on this page, still include it with 'BLANK' "
+        "values."
+    )
+
+
+def extract_operations_from_page(operations: list, image_bytes: bytes) -> list:
+    """
+    Extracts operator, timestamp, and quantity-used data per operation from
+    one page, for ALCOA chronology and material reconciliation checks.
+    """
+    prompt = _build_operations_prompt(operations)
+    result = extract_field(prompt, image_bytes)
+
+    if not result["success"]:
+        return [
+            {
+                "operation_id": op["operation_id"],
+                "description": op["description"],
+                "page_no": op["page_no"],
+                "material_used": op.get("material_used"),
+                "operator": None,
+                "timestamp": None,
+                "qty_used": None,
+                "model_used": None,
+                "success": False,
+                "error": result.get("error"),
+            }
+            for op in operations
+        ]
+
+    raw_text = result["text"].strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.strip("`").replace("json", "", 1).strip()
+
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return [
+            {
+                "operation_id": op["operation_id"],
+                "description": op["description"],
+                "page_no": op["page_no"],
+                "material_used": op.get("material_used"),
+                "operator": None,
+                "timestamp": None,
+                "qty_used": None,
+                "model_used": result.get("model_used"),
+                "success": False,
+                "error": f"Could not parse model JSON response: {raw_text[:200]}",
+            }
+            for op in operations
+        ]
+
+    by_id = {item.get("operation_id"): item for item in parsed}
+
+    output = []
+    for op in operations:
+        item = by_id.get(op["operation_id"], {})
+        output.append(
+            {
+                "operation_id": op["operation_id"],
+                "description": op["description"],
+                "page_no": op["page_no"],
+                "material_used": op.get("material_used"),
+                "operator": item.get("operator", "BLANK"),
+                "timestamp": item.get("timestamp", "BLANK"),
+                "qty_used": item.get("qty_used"),
+                "model_used": result.get("model_used"),
+                "success": True,
+                "error": None,
+            }
+        )
+    return output
+
+
 def extract_all_from_page(parameters: list, image_bytes: bytes) -> list:
     """
     MVP mode: one vision call for the whole page instead of per-field crops.
