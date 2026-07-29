@@ -1,0 +1,13 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+.DS_Store
+outputs/*.xlsx
+outputs/*.png
+outputs/*.jpg
+!outputs/.gitkeep
+data/sample_pages/*.png
+data/sample_pages/*.jpg
+!data/sample_pages/.gitkeep
+venv/
+.env

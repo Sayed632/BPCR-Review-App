@@ -1,0 +1,60 @@
+# BPCR Review App (MVP)
+
+Reads executed/handwritten Batch Production Control Record (BPCR) pages,
+compares each recorded value against the digitized master specification,
+and produces an observation report (page no., instruction, written value,
+status).
+
+## Pipeline
+Capture (upload or phone camera) → Preprocess (deskew/contrast) →
+Extract (vision LLM via OpenRouter, with fallback) → Compare (range/text
+rule engine) → Report (in-app table + Excel export)
+
+## Local setup
+```bash
+pip install -r requirements.txt
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# edit secrets.toml and add your real OPENROUTER_API_KEY
+streamlit run app.py
+```
+
+## Deploy to Streamlit Community Cloud
+1. Push this repo to GitHub (private recommended)
+2. Go to share.streamlit.io → New app → select this repo → `app.py`
+3. In App settings → Secrets, paste:
+   ```
+   OPENROUTER_API_KEY = "your-key-here"
+   ```
+4. Deploy — Streamlit Cloud builds and hosts automatically on every push
+
+## Current MVP scope
+- One master spec (`data/master_specs/sample_product_A.json`)
+- One page at a time (upload or camera)
+- Whole-page extraction (single vision call, structured JSON response)
+- Numeric range check + text/vocabulary match
+- Excel export of results
+
+## Not yet built (post-MVP)
+- Multi-product spec selection
+- Per-field cropping for higher extraction precision
+- Unit conversion (°F↔°C, mL↔L, etc.)
+- Fuzzy text matching for handwriting variants
+- Batch/multi-page processing
+- Model fallback chain testing at scale (router supports it, needs live validation)
+
+## Repo structure
+```
+app.py                  Main Streamlit entry point
+config/settings.py      Constants + secrets access
+core/
+  model_router.py       OpenRouter calls with model fallback chain
+  preprocessor.py        Deskew + contrast enhancement
+  extractor.py           Prompt building + vision extraction
+  comparator.py           Spec comparison rule engine
+  report_builder.py       Observation table + Excel export
+ui/
+  upload_view.py          File upload / camera capture
+  review_view.py          Results table + export button
+data/master_specs/        Digitized BPCR specs (JSON)
+tests/                     Unit tests
+```

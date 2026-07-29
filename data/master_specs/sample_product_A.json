@@ -1,0 +1,53 @@
+{
+  "product_name": "Sample Product A",
+  "bpcr_version": "v1.0",
+  "parameters": [
+    {
+      "parameter": "Granulation Temperature",
+      "page_no": 3,
+      "unit": "degC",
+      "expected_type": "numeric",
+      "spec_min": 55,
+      "spec_max": 65
+    },
+    {
+      "parameter": "Blending Time",
+      "page_no": 4,
+      "unit": "min",
+      "expected_type": "numeric",
+      "spec_min": 20,
+      "spec_max": 25
+    },
+    {
+      "parameter": "Batch Volume",
+      "page_no": 5,
+      "unit": "L",
+      "expected_type": "numeric",
+      "spec_min": 95,
+      "spec_max": 105
+    },
+    {
+      "parameter": "Yield",
+      "page_no": 6,
+      "unit": "%",
+      "expected_type": "numeric",
+      "spec_min": 97,
+      "spec_max": 100
+    },
+    {
+      "parameter": "Compression Force",
+      "page_no": 7,
+      "unit": "kg",
+      "expected_type": "numeric",
+      "spec_min": 8,
+      "spec_max": 12
+    },
+    {
+      "parameter": "Weight Variation Check",
+      "page_no": 8,
+      "unit": "text",
+      "expected_type": "text",
+      "allowed_values": ["Compliant", "Not Compliant"]
+    }
+  ]
+}
