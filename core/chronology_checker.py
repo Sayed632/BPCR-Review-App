@@ -1,12 +1,16 @@
 """
 core/chronology_checker.py
-ALCOA "Attributable" + "Contemporaneous" check:
-Flags cases where the same operator is recorded performing two different
-operations at the same (or overlapping) timestamp — physically impossible,
-and a classic data-integrity red flag (backdating, copying, proxy signing).
+ALCOA "Attributable" + "Contemporaneous" check.
+
+Updated for real BPCRs where operations have a start time AND an end
+time (e.g. "maintain 3 hours"), not just one instant. A conflict now
+means: the same operator has two DIFFERENT operations whose
+[start, end] windows genuinely overlap - not just an identical single
+timestamp, which would falsely flag every long-running step against
+itself-adjacent short ones.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import combinations
 
 TIMESTAMP_FORMATS = [
@@ -21,9 +25,9 @@ TIMESTAMP_FORMATS = [
 
 
 def _parse_timestamp(raw: str):
-    if not raw or raw.upper() in ("BLANK", "ILLEGIBLE"):
+    if not raw or str(raw).upper() in ("BLANK", "ILLEGIBLE", "NONE"):
         return None
-    raw = raw.strip()
+    raw = str(raw).strip()
     for fmt in TIMESTAMP_FORMATS:
         try:
             return datetime.strptime(raw, fmt)
@@ -38,43 +42,49 @@ def _normalize_operator(name: str) -> str:
 
 def check_chronology(operations: list) -> dict:
     """
-    operations: list of extraction results from extractor.extract_operations_from_page
-    Returns:
-      {
-        "conflicts": [ ... same operator, overlapping/duplicate timestamps ... ],
-        "unparseable": [ ... entries whose timestamp couldn't be read ... ]
-      }
+    operations: extraction results, each with operator, start_time,
+                and optionally end_time (falls back to timestamp for
+                backward compatibility with single-point entries).
+    Returns: {"conflicts": [...], "unparseable": [...]}
     """
     parsed_entries = []
     unparseable = []
 
     for op in operations:
         operator = _normalize_operator(op.get("operator"))
-        raw_ts = op.get("timestamp")
-        parsed_ts = _parse_timestamp(raw_ts)
+        raw_start = op.get("start_time") or op.get("timestamp")
+        raw_end = op.get("end_time")
 
         if not operator or operator in ("BLANK", "ILLEGIBLE"):
-            continue  # can't attribute — separate concern from comparator's MISSING_ENTRY flag
+            continue
 
-        if parsed_ts is None:
+        start = _parse_timestamp(raw_start)
+        if start is None:
             unparseable.append(
                 {
-                    "operation_id": op["operation_id"],
+                    "operation_id": op.get("operation_id"),
                     "operator": op.get("operator"),
-                    "raw_timestamp": raw_ts,
-                    "page_no": op["page_no"],
+                    "raw_timestamp": raw_start,
+                    "page_no": op.get("page_no"),
                 }
             )
             continue
 
+        end = _parse_timestamp(raw_end) if raw_end else None
+        if end is None or end <= start:
+            # No usable end time - treat as a near-instant point so it
+            # only conflicts on genuine overlap, not by default.
+            end = start + timedelta(minutes=1)
+
         parsed_entries.append(
             {
-                "operation_id": op["operation_id"],
+                "operation_id": op.get("operation_id"),
                 "description": op.get("description"),
                 "operator": operator,
                 "operator_raw": op.get("operator"),
-                "timestamp": parsed_ts,
-                "page_no": op["page_no"],
+                "start": start,
+                "end": end,
+                "page_no": op.get("page_no"),
             }
         )
 
@@ -84,21 +94,22 @@ def check_chronology(operations: list) -> dict:
         by_operator.setdefault(entry["operator"], []).append(entry)
 
     for operator, entries in by_operator.items():
-        entries.sort(key=lambda e: e["timestamp"])
+        entries.sort(key=lambda e: e["start"])
         for a, b in combinations(entries, 2):
             if a["operation_id"] == b["operation_id"]:
                 continue
-            if a["timestamp"] == b["timestamp"]:
+            overlap = a["start"] < b["end"] and b["start"] < a["end"]
+            if overlap:
                 conflicts.append(
                     {
                         "operator": a["operator_raw"],
                         "operation_1": a["operation_id"],
-                        "time_1": a["timestamp"].strftime("%Y-%m-%d %H:%M"),
+                        "window_1": f"{a['start'].strftime('%Y-%m-%d %H:%M')} - {a['end'].strftime('%H:%M')}",
                         "page_1": a["page_no"],
                         "operation_2": b["operation_id"],
-                        "time_2": b["timestamp"].strftime("%Y-%m-%d %H:%M"),
+                        "window_2": f"{b['start'].strftime('%Y-%m-%d %H:%M')} - {b['end'].strftime('%H:%M')}",
                         "page_2": b["page_no"],
-                        "conflict_type": "IDENTICAL_TIMESTAMP_DIFFERENT_OPERATIONS",
+                        "conflict_type": "OVERLAPPING_WINDOW_DIFFERENT_OPERATIONS",
                     }
                 )
 

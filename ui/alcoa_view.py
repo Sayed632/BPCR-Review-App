@@ -48,3 +48,41 @@ def show_reconciliation(reconciliation_result: dict):
     if details:
         with st.expander("Per-operation consumption detail"):
             st.dataframe(pd.DataFrame(details), use_container_width=True)
+
+
+def show_personnel_check(validation_results: list):
+    st.subheader("Personnel / Attributability Check")
+
+    unrecognized = [r for r in validation_results if r["status"] == "UNRECOGNIZED"]
+    fuzzy = [r for r in validation_results if r["status"] == "FUZZY_MATCHED"]
+
+    if unrecognized:
+        st.error(f"{len(unrecognized)} entries signed by a name not on the Signature Table.")
+        st.dataframe(pd.DataFrame(unrecognized), use_container_width=True)
+    else:
+        st.success("All recognized operator entries matched the Signature Table.")
+
+    if fuzzy:
+        st.warning(f"{len(fuzzy)} entries matched only approximately (handwriting variance) — worth a visual check.")
+        st.dataframe(pd.DataFrame(fuzzy), use_container_width=True)
+
+
+def show_timeseries_issues(operation_id: str, table_name: str, result: dict):
+    out_of_range = result.get("out_of_range", [])
+    missed = result.get("missed_intervals", [])
+    unparseable = result.get("unparseable_rows", [])
+
+    if not out_of_range and not missed and not unparseable:
+        st.success(f"{table_name} ({operation_id}): all readings in range, no missed intervals.")
+        return
+
+    st.warning(f"{table_name} ({operation_id}): issues found.")
+    if out_of_range:
+        st.write("Out-of-range readings:")
+        st.dataframe(pd.DataFrame(out_of_range), use_container_width=True)
+    if missed:
+        st.write("Missed/late intervals:")
+        st.dataframe(pd.DataFrame(missed), use_container_width=True)
+    if unparseable:
+        st.write("Unparseable rows:")
+        st.dataframe(pd.DataFrame(unparseable), use_container_width=True)

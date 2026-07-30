@@ -226,3 +226,148 @@ def extract_all_from_page(parameters: list, image_bytes: bytes) -> list:
         }
         for p in parameters
     ]
+
+
+def _build_rich_operations_prompt(operations: list) -> str:
+    op_blocks = []
+    for op in operations:
+        materials = op.get("materials_used", [])
+        mat_desc = (
+            ", ".join(f"{m['material']} (unit: {m.get('unit', 'n/a')})" for m in materials)
+            if materials
+            else "none"
+        )
+        params = op.get("parameters", [])
+        param_desc = (
+            ", ".join(f"{p['parameter']} (unit: {p.get('unit', 'n/a')})" for p in params)
+            if params
+            else "none"
+        )
+        op_blocks.append(
+            f"- Operation \"{op['operation_id']}\" ({op['description']}): "
+            f"operator required={op.get('requires_operator', True)}, "
+            f"start_time required={op.get('requires_start_time', True)}, "
+            f"end_time required={op.get('requires_end_time', False)}, "
+            f"materials to read quantity for: {mat_desc}, "
+            f"parameters to read: {param_desc}"
+        )
+    op_list = "\n".join(op_blocks)
+
+    return (
+        "This image is a page from an executed pharmaceutical batch production "
+        "control record. For each operation below, extract what is visible on "
+        "this page:\n\n"
+        f"{op_list}\n\n"
+        "For each operation return:\n"
+        "- operator: handwritten name/initials/signature ('BLANK' or 'ILLEGIBLE' if not readable)\n"
+        "- start_time: handwritten start date/time, exactly as written\n"
+        "- end_time: handwritten end date/time, exactly as written (if applicable)\n"
+        "- materials: array of {\"material\": name, \"qty_used\": value} for each "
+        "material listed for that operation\n"
+        "- parameters: array of {\"parameter\": name, \"written_value\": value} for "
+        "each parameter listed for that operation\n\n"
+        "Respond with ONLY a JSON array, one object per operation:\n"
+        '[{"operation_id": "OP-01", "operator": "<value>", "start_time": "<value>", '
+        '"end_time": "<value or null>", "materials": [...], "parameters": [...]}]\n'
+        "No other text, no markdown fences. Use 'BLANK' for anything not visible "
+        "on this page, still include every operation listed above."
+    )
+
+
+def extract_rich_operations_from_page(operations: list, image_bytes: bytes) -> list:
+    """
+    Extended extraction: operator, start/end time, multiple materials,
+    and embedded parameters per operation - matches the real BPCR schema
+    (materials_used list, requires_start_time/end_time, parameters).
+    """
+    prompt = _build_rich_operations_prompt(operations)
+    result = extract_field(prompt, image_bytes)
+
+    def _blank_row(op):
+        return {
+            "operation_id": op["operation_id"],
+            "description": op["description"],
+            "page_no": op["page_no"],
+            "operator": "BLANK",
+            "start_time": "BLANK",
+            "end_time": None,
+            "materials": [{"material": m["material"], "qty_used": "BLANK"} for m in op.get("materials_used", [])],
+            "parameters": [{"parameter": p["parameter"], "written_value": "BLANK"} for p in op.get("parameters", [])],
+            "model_used": result.get("model_used"),
+            "success": result["success"],
+            "error": result.get("error"),
+        }
+
+    if not result["success"]:
+        return [_blank_row(op) for op in operations]
+
+    raw_text = result["text"].strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.strip("`").replace("json", "", 1).strip()
+
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError:
+        rows = [_blank_row(op) for op in operations]
+        for row in rows:
+            row["success"] = False
+            row["error"] = f"Could not parse model JSON response: {raw_text[:200]}"
+        return rows
+
+    by_id = {item.get("operation_id"): item for item in parsed}
+
+    output = []
+    for op in operations:
+        item = by_id.get(op["operation_id"], {})
+        output.append(
+            {
+                "operation_id": op["operation_id"],
+                "description": op["description"],
+                "page_no": op["page_no"],
+                "operator": item.get("operator", "BLANK"),
+                "start_time": item.get("start_time", "BLANK"),
+                "end_time": item.get("end_time"),
+                "materials": item.get("materials", []),
+                "parameters": item.get("parameters", []),
+                "model_used": result.get("model_used"),
+                "success": True,
+                "error": None,
+            }
+        )
+    return output
+
+
+def _build_timeseries_prompt(table_name: str, value_unit: str) -> str:
+    return (
+        f"This image is a page from an executed pharmaceutical batch production "
+        f"control record. Find the handwritten log table titled '{table_name}' "
+        f"which records periodic readings with columns: Date, Time, Recorded By "
+        f"(operator), and a value in unit '{value_unit}'. Transcribe every row "
+        f"you can see.\n\n"
+        "Respond with ONLY a JSON array, one object per row:\n"
+        '[{"date": "<value>", "time": "<value>", "recorded_by": "<value>", '
+        '"value": "<value>"}]\n'
+        "If the table is not visible on this page, respond with an empty JSON "
+        "array []. No other text, no markdown fences."
+    )
+
+
+def extract_timeseries_from_page(table_name: str, value_unit: str, image_bytes: bytes) -> list:
+    """
+    Extracts rows from a repeating log table (e.g. Table-1/Table-2 hourly
+    temperature readings) on one page.
+    """
+    prompt = _build_timeseries_prompt(table_name, value_unit)
+    result = extract_field(prompt, image_bytes)
+
+    if not result["success"]:
+        return []
+
+    raw_text = result["text"].strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.strip("`").replace("json", "", 1).strip()
+
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        return []

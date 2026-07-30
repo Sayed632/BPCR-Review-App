@@ -1,0 +1,192 @@
+{
+  "product_name": "APPLE-ORANGE Batch Process",
+  "bpcr_version": "v1.0",
+  "personnel": [
+    {"emp_id": "E001", "name": "A. Kumar", "designation": "Chemist"},
+    {"emp_id": "E002", "name": "B. Rao", "designation": "Supervisor"},
+    {"emp_id": "E003", "name": "C. Naidu", "designation": "Chemist"}
+  ],
+  "materials": [
+    {
+      "material": "APPLE",
+      "type": "KSM",
+      "code": "KSM 6100",
+      "qty_indented": 100,
+      "unit": "kg",
+      "tolerance_pct": 2,
+      "tolerance_type": "two_sided"
+    },
+    {
+      "material": "Orange",
+      "type": "KSM",
+      "code": "KSM 6101",
+      "qty_indented": 80,
+      "unit": "kg",
+      "tolerance_pct": 2,
+      "tolerance_type": "two_sided",
+      "conditional_addition": {
+        "qty": 10,
+        "unit": "kg",
+        "related_operation": "OP-06",
+        "note": "Only added if IPC-1 APPLE result is >= 1.5% area (Step 5 branch)"
+      }
+    },
+    {
+      "material": "IPA",
+      "type": "GRM",
+      "code": "GRM 1101",
+      "qty_indented": 500,
+      "unit": "L",
+      "tolerance_pct": 5,
+      "tolerance_type": "two_sided"
+    },
+    {
+      "material": "Water",
+      "type": "GRM",
+      "code": "GRM 1102",
+      "qty_indented": 1000,
+      "unit": "L",
+      "tolerance_pct": 5,
+      "tolerance_type": "two_sided"
+    }
+  ],
+  "operations": [
+    {
+      "operation_id": "OP-01",
+      "description": "Check reactor SSR-101/SSR-102 is clean",
+      "page_no": 3,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": false,
+      "materials_used": [],
+      "parameters": []
+    },
+    {
+      "operation_id": "OP-02",
+      "description": "Charge IPA 500 Lts into SSR-101/SSR-102",
+      "page_no": 3,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": false,
+      "materials_used": [{"material": "IPA", "unit": "L"}],
+      "parameters": []
+    },
+    {
+      "operation_id": "OP-03",
+      "description": "Charge APPLE 100 Kg and Orange 70 Kg into SSR-101/SSR-102",
+      "page_no": 3,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": false,
+      "materials_used": [
+        {"material": "APPLE", "unit": "kg"},
+        {"material": "Orange", "unit": "kg"}
+      ],
+      "parameters": []
+    },
+    {
+      "operation_id": "OP-04",
+      "description": "Heat to reflux, maintain RPM",
+      "page_no": 4,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": true,
+      "materials_used": [],
+      "parameters": [
+        {"parameter": "Reflux Temperature", "unit": "degC", "expected_type": "numeric", "spec_min": 85, "spec_max": 90},
+        {"parameter": "RPM Maintained", "unit": "rpm", "expected_type": "numeric", "spec_min": 5, "spec_max": 15}
+      ]
+    },
+    {
+      "operation_id": "OP-05",
+      "description": "Maintain reaction mass at 87+-2C for 3 hours; record Table-1 every 30+-5 min; cool, sample for IPC-1 (APPLE NMT 1.5% area)",
+      "page_no": 5,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": true,
+      "materials_used": [],
+      "parameters": [
+        {"parameter": "Reaction Mass Temperature", "unit": "degC", "expected_type": "numeric", "spec_min": 85, "spec_max": 89}
+      ],
+      "time_series_log": {
+        "table_name": "Table-1",
+        "interval_minutes": 30,
+        "interval_tolerance_minutes": 5,
+        "value_unit": "degC",
+        "spec_min": 85,
+        "spec_max": 89
+      },
+      "ipc": {
+        "ipc_name": "IPC-1",
+        "test": "APPLE Content",
+        "spec_nmt_pct": 1.5,
+        "conditional_action": "If result >= 1.5% area: add Orange 10 Kg, continue 2 hours, log Table-2, recheck as IPC-2"
+      }
+    },
+    {
+      "operation_id": "OP-06",
+      "description": "(Conditional) Add Orange 10 Kg if IPC-1 failed; maintain 2 more hours; record Table-2 every 15+-5 min; recheck IPC-2",
+      "page_no": 6,
+      "requires_operator": true,
+      "requires_start_time": false,
+      "requires_end_time": false,
+      "conditional_only": true,
+      "materials_used": [{"material": "Orange", "unit": "kg", "conditional": true}],
+      "parameters": [],
+      "time_series_log": {
+        "table_name": "Table-2",
+        "interval_minutes": 15,
+        "interval_tolerance_minutes": 5,
+        "value_unit": "degC",
+        "spec_min": 85,
+        "spec_max": 89
+      }
+    },
+    {
+      "operation_id": "OP-07",
+      "description": "Distillate reaction mass till HT volume ~300-350 Lts, transfer to GLR-110/GRL-112",
+      "page_no": 6,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": true,
+      "materials_used": [],
+      "parameters": [
+        {"parameter": "Volume Before Transfer", "unit": "L", "expected_type": "numeric", "spec_min": 300, "spec_max": 350}
+      ]
+    },
+    {
+      "operation_id": "OP-08",
+      "description": "Charge 1000 L water, distillate till HT shows 800 L distillate water",
+      "page_no": 6,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": true,
+      "materials_used": [{"material": "Water", "unit": "L"}],
+      "parameters": [
+        {"parameter": "Volume of Water Distilled", "unit": "L", "expected_type": "numeric", "spec_min": 760, "spec_max": 840}
+      ]
+    },
+    {
+      "operation_id": "OP-09",
+      "description": "Filter off water, dry for at least 8 hours",
+      "page_no": 7,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": true,
+      "materials_used": [],
+      "parameters": [
+        {"parameter": "Drying Hours", "unit": "hr", "expected_type": "numeric", "spec_min": 8, "spec_max": 24}
+      ]
+    },
+    {
+      "operation_id": "OP-10",
+      "description": "Unload material into containers, send sample to QC",
+      "page_no": 8,
+      "requires_operator": true,
+      "requires_start_time": true,
+      "requires_end_time": false,
+      "materials_used": [],
+      "parameters": []
+    }
+  ]
+}

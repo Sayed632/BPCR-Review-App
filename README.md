@@ -37,34 +37,48 @@ streamlit run app.py
    ```
 4. Deploy — Streamlit Cloud builds and hosts automatically on every push
 
-## Current MVP scope
-- One master spec (`data/master_specs/sample_product_A.json`)
-- One page at a time (upload or camera); operations persist to Supabase
-  keyed by batch number, so they accumulate across pages AND across
-  sessions/days for the same batch
-- Whole-page extraction (single vision call, structured JSON response)
-- Numeric range check + text/vocabulary match
-- ALCOA checks:
-  - **Chronology/attributability**: flags an operator recorded at identical timestamps across different operations (physically impossible)
-  - **Material reconciliation**: sums quantity used per material across operations, compares to quantity indented within a loss tolerance
-- Excel export of results
+## Current scope — real-case build
+Rebuilt around an actual uploaded master BPCR (multi-material charging
+steps, IPC decision branch, repeating temperature logs, signature table):
 
-## ALCOA coverage
-- **Accurate** — range/text comparator
-- **Legible** — ILLEGIBLE flag on extraction
-- **Attributable** — operator captured per operation; chronology conflicts surface attribution problems
-- **Contemporaneous** — timestamp sequence check (chronology_checker.py)
-- **Original** — not yet built; would need visual overwrite/correction detection on the raw image, beyond transcription
+- **Master spec**: `data/master_specs/apple_orange_batch.json` — 10
+  operations, 4 materials (KSM/GRM typed), 3 known personnel
+- Multi-material-per-operation extraction (e.g. APPLE + Orange charged
+  in one step)
+- Start/end time windows per operation (not just one instant)
+- **Material reconciliation**: type-based two-sided tolerance (KSM ±2%,
+  GRM ±5% per the BPCR's own notes), plus a widened acceptable range
+  for the conditional Orange +10 kg addition, since whether that branch
+  fires depends on an IPC lab result
+- **Chronology check**: flags overlapping start/end *windows* for the
+  same operator, not just identical single timestamps
+- **Time-series log check** (`core/timeseries_checker.py`): validates
+  Table-1/Table-2 style repeating readings against spec range and
+  interval (e.g. every 30±5 min), flags missed/late readings
+- **Personnel validation** (`core/personnel_validator.py`): cross-checks
+  handwritten operator names against the master BPCR's Signature Table,
+  fuzzy-matches minor handwriting variance, flags unrecognized names
+- Supabase persistence extended: `operation_materials` and
+  `timeseries_readings` tables (see `supabase_schema_v2.sql` — run
+  after the original `supabase_schema.sql`)
+- Process flow diagram: `apple_orange_process_flow.pdf` — visual
+  reference showing the operation sequence and the IPC-1 decision
+  branch, for human verification that the spec JSON matches the actual
+  document. This is a human-readable companion, not what the app reads
+  at runtime — the app always works from the structured spec JSON.
 
 ## Not yet built (post-MVP)
-- Multi-product spec selection
 - Per-field cropping for higher extraction precision
-- Unit conversion (°F↔°C, mL↔L, etc.)
-- Fuzzy text matching for handwriting variants
-- Batch/multi-page processing UI polish (works, but no batch list/browse view yet)
-- Cross-batch chronology check (same operator, overlapping time, different batches) — `storage.load_operations_by_operator()` exists but isn't wired into the UI yet
-- Model fallback chain testing at scale (router supports it, needs live validation)
-- "Original" ALCOA pillar — overwrite/correction detection on raw images
+- Full IPC lab-result-value extraction feeding the conditional branch
+  automatically (currently the reconciler tolerates either branch
+  outcome via a widened range, rather than confirming which branch
+  actually occurred)
+- Cross-batch chronology check (same operator, overlapping time,
+  different batches)
+- Model fallback chain testing at scale (router supports it, needs
+  live validation)
+- "Original" ALCOA pillar — overwrite/correction detection on raw
+  images
 - Tightening Supabase RLS policies if this moves beyond single-user use
 
 ## Repo structure
