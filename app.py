@@ -19,6 +19,7 @@ from core.storage import (
     ensure_batch,
     save_rich_operations,
     save_timeseries_readings,
+    save_parameter_observations,
     load_rich_operations,
     load_timeseries_readings,
 )
@@ -29,12 +30,14 @@ from ui.alcoa_view import (
     show_personnel_check,
     show_timeseries_issues,
 )
+from ui.apqr_view import show_apqr_dashboard
 
 REAL_SPEC_FILE = "apple_orange_batch.json"
 
 st.set_page_config(page_title="BPCR Review App", layout="wide")
 st.title("BPCR Review App")
-st.caption("Upload or photograph an executed BPCR page to review against spec.")
+
+mode = st.sidebar.radio("Mode", ["Batch Review", "APQR / Trend Analysis"])
 
 
 @st.cache_data
@@ -44,6 +47,12 @@ def load_spec(filename: str) -> dict:
 
 
 spec = load_spec(REAL_SPEC_FILE)
+
+if mode == "APQR / Trend Analysis":
+    show_apqr_dashboard(spec["product_name"])
+    st.stop()
+
+st.caption("Upload or photograph an executed BPCR page to review against spec.")
 st.info(
     f"Loaded spec: **{spec['product_name']}** "
     f"({len(spec['materials'])} materials, {len(spec['operations'])} operations)"
@@ -103,10 +112,14 @@ if image_bytes:
                     "parameter": pname,
                     **spec_params_by_name[pname],
                 }
-                param_rows.append(evaluate_field(extraction_result, param_spec))
+                row = evaluate_field(extraction_result, param_spec)
+                row["operation_id"] = op["operation_id"]
+                param_rows.append(row)
 
         if param_rows:
             st.session_state["param_rows"] = param_rows
+            with st.spinner("Saving parameter observations..."):
+                save_parameter_observations(batch_number, param_rows)
 
         # Time-series logs (Table-1 / Table-2), only for operations with a spec entry
         for spec_op in spec["operations"]:

@@ -130,3 +130,77 @@ def load_timeseries_readings(batch_number: str, table_name: str = None) -> list:
         }
         for r in result.data
     ]
+
+
+def save_parameter_observations(batch_number: str, param_rows: list):
+    """
+    param_rows: output rows from comparator.evaluate_field() - persists
+    every parameter reading so it can be trended across batches later
+    (APQR, control charts, deviation-rate reporting, etc.).
+    """
+    client = get_client()
+    db_rows = [
+        {
+            "batch_number": batch_number,
+            "page_no": row.get("page_no"),
+            "parameter": row.get("parameter"),
+            "spec_instruction": row.get("spec_instruction"),
+            "written_value": row.get("written_value"),
+            "status": row.get("status"),
+            "deviation_type": row.get("deviation_type"),
+            "model_used": row.get("model_used"),
+        }
+        for row in param_rows
+    ]
+    if db_rows:
+        client.table("parameter_observations").upsert(
+            db_rows, on_conflict="batch_number,operation_id,parameter"
+        ).execute()
+
+
+def load_all_batches(product_name: str = None) -> list:
+    client = get_client()
+    query = client.table("batches").select("*")
+    if product_name:
+        query = query.eq("product_name", product_name)
+    return query.execute().data
+
+
+def load_all_parameter_observations(product_name: str = None) -> list:
+    """
+    Cross-batch pull of every parameter observation - the core data
+    source for APQR trending, control charts, and deviation-rate
+    analysis across a product's batch history.
+    """
+    client = get_client()
+    if product_name:
+        batch_numbers = [b["batch_number"] for b in load_all_batches(product_name)]
+        if not batch_numbers:
+            return []
+        result = (
+            client.table("parameter_observations")
+            .select("*")
+            .in_("batch_number", batch_numbers)
+            .execute()
+        )
+    else:
+        result = client.table("parameter_observations").select("*").execute()
+    return result.data
+
+
+def load_all_operation_materials(product_name: str = None) -> list:
+    """Cross-batch material usage - feeds material reconciliation trending."""
+    client = get_client()
+    if product_name:
+        batch_numbers = [b["batch_number"] for b in load_all_batches(product_name)]
+        if not batch_numbers:
+            return []
+        result = (
+            client.table("operation_materials")
+            .select("*")
+            .in_("batch_number", batch_numbers)
+            .execute()
+        )
+    else:
+        result = client.table("operation_materials").select("*").execute()
+    return result.data

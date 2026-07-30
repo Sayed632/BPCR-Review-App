@@ -23,9 +23,12 @@ streamlit run app.py
 2. Go to **Project Settings → API**, copy the **Project URL** and the
    **anon/public** key (not `service_role` — never use that one here)
 3. Go to **SQL Editor → New Query**, paste the contents of
-   `supabase_schema.sql`, and run it once — this creates the `batches`
-   and `operations` tables with permissive RLS policies (fine for a
-   single-user internal tool; tighten before wider use)
+   `supabase_schema.sql`, run it, then also run `supabase_schema_v2.sql`
+   and `supabase_schema_v3.sql` in the same way (each adds tables the
+   later features depend on) — this creates `batches`, `operations`,
+   `operation_materials`, `timeseries_readings`, and
+   `parameter_observations`, all with permissive RLS policies (fine
+   for a single-user internal tool; tighten before wider use)
 4. Add `SUPABASE_URL` and `SUPABASE_KEY` to your secrets (see above)
 
 ## Deploy to Streamlit Community Cloud
@@ -66,6 +69,17 @@ steps, IPC decision branch, repeating temperature logs, signature table):
   branch, for human verification that the spec JSON matches the actual
   document. This is a human-readable companion, not what the app reads
   at runtime — the app always works from the structured spec JSON.
+- **APQR / cross-batch trend analysis** (`core/apqr_export.py`,
+  `ui/apqr_view.py`): every parameter observation and material usage
+  reading now persists to Supabase (`parameter_observations` table,
+  `supabase_schema_v3.sql`), so once multiple batches have been
+  processed you can switch to "APQR / Trend Analysis" mode in the
+  sidebar to see:
+  - a per-batch parameter summary table
+  - deviation rate by batch (in-range/out-of-range/missing/illegible counts)
+  - material usage trend per batch
+  - one-click multi-sheet Excel export of all of the above, ready to
+    hand to an APQR author or feed into further statistical analysis
 
 ## Not yet built (post-MVP)
 - Per-field cropping for higher extraction precision
