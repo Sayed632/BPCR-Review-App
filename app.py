@@ -80,6 +80,20 @@ if image_bytes:
         with st.spinner("Reading operations, materials, and parameters..."):
             rich_ops = extract_rich_operations_from_page(spec["operations"], cleaned_bytes)
 
+        # Surface real API/extraction failures instead of letting them look
+        # like "nothing written on this page" (both would otherwise show as
+        # BLANK / MISSING_ENTRY, which is misleading).
+        failed_ops = [op for op in rich_ops if not op.get("success", True)]
+        if failed_ops:
+            error_messages = {op.get("error") for op in failed_ops if op.get("error")}
+            st.error(
+                f"Extraction call failed for this page ({len(failed_ops)} operation(s) affected). "
+                "The results below reflect a failed API call, not empty handwriting. "
+                "Check OPENROUTER_API_KEY in Secrets and OpenRouter account credits/limits."
+            )
+            for msg in error_messages:
+                st.code(msg)
+
         # Only persist operations that actually have data on this page
         ops_with_data = [
             op
@@ -105,7 +119,9 @@ if image_bytes:
                     continue
                 extraction_result = {
                     "written_value": extracted_param.get("written_value"),
-                    "success": True,
+                    "success": op.get("success", True),
+                    "model_used": op.get("model_used"),
+                    "error": op.get("error"),
                 }
                 param_spec = {
                     "page_no": op["page_no"],
