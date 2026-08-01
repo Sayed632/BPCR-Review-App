@@ -1,7 +1,9 @@
 """
-model_router.py
-Routes vision/handwriting extraction calls through OpenRouter,
-with automatic fallback if the primary model fails.
+core/model_router.py
+Calls Google's Gemini API directly (no OpenRouter) for vision/
+handwriting extraction. Switched from OpenRouter's multi-model
+fallback chain to unblock testing on Gemini's free tier - trade-off
+is no automatic fallback to GPT-4o/Claude if Gemini is unavailable.
 """
 
 import base64
@@ -9,17 +11,10 @@ import time
 import requests
 import streamlit as st
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+GEMINI_MODEL = "gemini-2.5-pro"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
-# Ordered list: primary first, fallbacks after.
-# All must support image/vision input.
-MODEL_CHAIN = [
-    "google/gemini-2.5-pro",
-    "openai/gpt-4o",
-    "anthropic/claude-sonnet-4.5",
-]
-
-MAX_RETRIES_PER_MODEL = 1
+MAX_RETRIES = 1
 TIMEOUT_SECONDS = 30
 
 
@@ -27,30 +22,27 @@ def _encode_image(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 
-def _call_model(model_name: str, prompt: str, image_bytes: bytes) -> dict:
-    headers = {
-        "Authorization": f"Bearer {st.secrets['OPENROUTER_API_KEY']}",
-        "Content-Type": "application/json",
-    }
+def _call_gemini(prompt: str, image_bytes: bytes) -> dict:
+    api_key = st.secrets["GEMINI_API_KEY"]
     payload = {
-        "model": model_name,
-        "messages": [
+        "contents": [
             {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
+                "parts": [
+                    {"text": prompt},
                     {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{_encode_image(image_bytes)}"
-                        },
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": _encode_image(image_bytes),
+                        }
                     },
-                ],
+                ]
             }
-        ],
+        ]
     }
     response = requests.post(
-        OPENROUTER_URL, headers=headers, json=payload, timeout=TIMEOUT_SECONDS
+        f"{GEMINI_URL}?key={api_key}",
+        json=payload,
+        timeout=TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.json()
@@ -58,27 +50,26 @@ def _call_model(model_name: str, prompt: str, image_bytes: bytes) -> dict:
 
 def extract_field(prompt: str, image_bytes: bytes) -> dict:
     """
-    Tries each model in MODEL_CHAIN in order until one succeeds.
-    Returns extracted text plus which model actually served the request
-    (important for audit trail when reviewers question a reading).
+    Same interface as before so extractor.py needs no changes.
+    Returns {"success", "model_used", "text", "raw"} or
+    {"success": False, "model_used": None, "text": None, "error"}.
     """
     last_error = None
 
-    for model_name in MODEL_CHAIN:
-        for attempt in range(MAX_RETRIES_PER_MODEL + 1):
-            try:
-                result = _call_model(model_name, prompt, image_bytes)
-                text_output = result["choices"][0]["message"]["content"]
-                return {
-                    "success": True,
-                    "model_used": model_name,
-                    "text": text_output,
-                    "raw": result,
-                }
-            except Exception as e:
-                last_error = str(e)
-                time.sleep(1)  # brief backoff before retry/fallback
-                continue
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            result = _call_gemini(prompt, image_bytes)
+            text_output = result["candidates"][0]["content"]["parts"][0]["text"]
+            return {
+                "success": True,
+                "model_used": GEMINI_MODEL,
+                "text": text_output,
+                "raw": result,
+            }
+        except Exception as e:
+            last_error = str(e)
+            time.sleep(1)
+            continue
 
     return {
         "success": False,

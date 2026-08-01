@@ -6,8 +6,8 @@ Never hardcode keys here — always pull from st.secrets.
 
 import streamlit as st
 
-def get_openrouter_key() -> str:
-    return st.secrets["OPENROUTER_API_KEY"]
+def get_gemini_key() -> str:
+    return st.secrets["GEMINI_API_KEY"]
 
 # Paths
 MASTER_SPECS_DIR = "data/master_specs"

@@ -14,9 +14,17 @@ rule engine) → Report (in-app table + Excel export)
 ```bash
 pip install -r requirements.txt
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# edit secrets.toml and add your real OPENROUTER_API_KEY, SUPABASE_URL, SUPABASE_KEY
+# edit secrets.toml and add your real GEMINI_API_KEY, SUPABASE_URL, SUPABASE_KEY
 streamlit run app.py
 ```
+
+## Vision extraction: Gemini (direct API)
+Extraction calls Google's Gemini API directly (`core/model_router.py`),
+not OpenRouter. Get a free-tier key at aistudio.google.com/apikey and
+add it as `GEMINI_API_KEY` in secrets. Trade-off vs. the original
+OpenRouter design: no automatic fallback to GPT-4o/Claude if Gemini is
+unavailable — if that matters later, OpenRouter (with a funded account)
+or a multi-provider direct setup can replace this.
 
 ## Supabase setup (one-time)
 1. Create a project at supabase.com
