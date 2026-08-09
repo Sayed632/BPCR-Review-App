@@ -1,7 +1,15 @@
 """
 app.py
-BPCR Review App — real-case pipeline for multi-material, multi-step
+BPCR Review App - real-case pipeline for multi-material, multi-step
 batch records with conditional branches and repeating log tables.
+
+Flow:
+  1. Upload the Master BPCR (PDF or images) -> parsed into a spec ->
+     human reviews/edits it -> confirms.
+  2. Upload executed BPCR page(s) (PDF or images, one or many) ->
+     each page is reviewed against the confirmed spec.
+  3. ALCOA / chronology / material reconciliation / time-series checks
+     run across everything saved for the batch so far.
 """
 
 import json
@@ -23,7 +31,8 @@ from core.storage import (
     load_rich_operations,
     load_timeseries_readings,
 )
-from ui.upload_view import get_bpcr_page
+from ui.upload_view import get_bpcr_pages
+from ui.master_spec_view import run_master_bpcr_parse_flow
 from ui.alcoa_view import (
     show_chronology,
     show_reconciliation,
@@ -32,7 +41,7 @@ from ui.alcoa_view import (
 )
 from ui.apqr_view import show_apqr_dashboard
 
-REAL_SPEC_FILE = "apple_orange_batch.json"
+DEMO_SPEC_FILE = "apple_orange_batch.json"
 
 st.set_page_config(page_title="BPCR Review App", layout="wide")
 st.title("BPCR Review App")
@@ -41,21 +50,38 @@ mode = st.sidebar.radio("Mode", ["Batch Review", "APQR / Trend Analysis"])
 
 
 @st.cache_data
-def load_spec(filename: str) -> dict:
+def load_demo_spec(filename: str) -> dict:
     with open(f"{MASTER_SPECS_DIR}/{filename}") as f:
         return json.load(f)
 
 
-spec = load_spec(REAL_SPEC_FILE)
+# --- Spec source: a freshly-uploaded/confirmed Master BPCR takes
+# priority; otherwise fall back to the bundled demo spec so the app
+# stays usable without requiring a fresh upload every session.
+confirmed_spec = run_master_bpcr_parse_flow()
+using_demo_spec = confirmed_spec is None
+
+if using_demo_spec:
+    st.info(
+        "No Master BPCR confirmed yet - using the bundled demo spec below "
+        "for now. Upload and confirm a Master BPCR above to review your "
+        "own product instead."
+    )
+    spec = load_demo_spec(DEMO_SPEC_FILE)
+else:
+    spec = confirmed_spec
 
 if mode == "APQR / Trend Analysis":
     show_apqr_dashboard(spec["product_name"])
     st.stop()
 
-st.caption("Upload or photograph an executed BPCR page to review against spec.")
+st.divider()
+st.subheader("Step 2: Executed BPCR")
+st.caption("Upload or photograph the executed (handwritten) BPCR to review against the spec above.")
 st.info(
-    f"Loaded spec: **{spec['product_name']}** "
+    f"Active spec: **{spec['product_name']}** "
     f"({len(spec['materials'])} materials, {len(spec['operations'])} operations)"
+    + (" — demo spec" if using_demo_spec else "")
 )
 
 batch_number = st.text_input(
@@ -68,88 +94,102 @@ if not batch_number:
     st.warning("Enter a batch number above to begin.")
     st.stop()
 
-image_bytes = get_bpcr_page()
+pages = get_bpcr_pages()
 
-if image_bytes:
-    st.image(image_bytes, caption="Captured page", width=400)
+if pages:
+    with st.expander(f"{len(pages)} page(s) queued", expanded=True):
+        cols = st.columns(min(len(pages), 4))
+        for i, (label, image_bytes) in enumerate(pages):
+            with cols[i % len(cols)]:
+                st.image(image_bytes, caption=label, width=200)
 
     if st.button("Run Review", type="primary"):
-        with st.spinner("Preprocessing image..."):
-            cleaned_bytes = preprocess_page(image_bytes)
+        all_param_rows = []
+        total_failed_ops = 0
+        all_error_messages = set()
 
-        with st.spinner("Reading operations, materials, and parameters..."):
+        progress = st.progress(0.0, text="Starting...")
+
+        for page_index, (label, image_bytes) in enumerate(pages):
+            progress.progress(
+                page_index / len(pages), text=f"Processing {label} ({page_index + 1}/{len(pages)})..."
+            )
+
+            cleaned_bytes = preprocess_page(image_bytes)
             rich_ops = extract_rich_operations_from_page(spec["operations"], cleaned_bytes)
 
-        # Surface real API/extraction failures instead of letting them look
-        # like "nothing written on this page" (both would otherwise show as
-        # BLANK / MISSING_ENTRY, which is misleading).
-        failed_ops = [op for op in rich_ops if not op.get("success", True)]
-        if failed_ops:
-            error_messages = {op.get("error") for op in failed_ops if op.get("error")}
-            st.error(
-                f"Extraction call failed for this page ({len(failed_ops)} operation(s) affected). "
-                "The results below reflect a failed API call, not empty handwriting. "
-                "Check OPENROUTER_API_KEY in Secrets and your OpenRouter free-tier rate limits."
-            )
-            for msg in error_messages:
-                st.code(msg)
+            failed_ops = [op for op in rich_ops if not op.get("success", True)]
+            total_failed_ops += len(failed_ops)
+            for op in failed_ops:
+                if op.get("error"):
+                    all_error_messages.add(op["error"])
 
-        # Only persist operations that actually have data on this page
-        ops_with_data = [
-            op
-            for op in rich_ops
-            if op.get("operator") not in (None, "BLANK")
-            or op.get("start_time") not in (None, "BLANK")
-        ]
+            # Only persist operations that actually have data on this page
+            ops_with_data = [
+                op
+                for op in rich_ops
+                if op.get("operator") not in (None, "BLANK")
+                or op.get("start_time") not in (None, "BLANK")
+            ]
 
-        with st.spinner("Saving to database..."):
             ensure_batch(batch_number, spec["product_name"], spec.get("bpcr_version"))
-            save_rich_operations(batch_number, ops_with_data)
+            if ops_with_data:
+                save_rich_operations(batch_number, ops_with_data)
 
-        # Embedded parameter comparison (per-operation, e.g. Reflux Temperature)
-        param_rows = []
-        for op in rich_ops:
-            spec_op = next((o for o in spec["operations"] if o["operation_id"] == op["operation_id"]), None)
-            if not spec_op:
-                continue
-            spec_params_by_name = {p["parameter"]: p for p in spec_op.get("parameters", [])}
-            for extracted_param in op.get("parameters", []):
-                pname = extracted_param.get("parameter")
-                if pname not in spec_params_by_name:
+            for op in rich_ops:
+                spec_op = next((o for o in spec["operations"] if o["operation_id"] == op["operation_id"]), None)
+                if not spec_op:
                     continue
-                extraction_result = {
-                    "written_value": extracted_param.get("written_value"),
-                    "success": op.get("success", True),
-                    "model_used": op.get("model_used"),
-                    "error": op.get("error"),
-                }
-                param_spec = {
-                    "page_no": op["page_no"],
-                    "parameter": pname,
-                    **spec_params_by_name[pname],
-                }
-                row = evaluate_field(extraction_result, param_spec)
-                row["operation_id"] = op["operation_id"]
-                param_rows.append(row)
+                spec_params_by_name = {p["parameter"]: p for p in spec_op.get("parameters", [])}
+                for extracted_param in op.get("parameters", []):
+                    pname = extracted_param.get("parameter")
+                    if pname not in spec_params_by_name:
+                        continue
+                    extraction_result = {
+                        "written_value": extracted_param.get("written_value"),
+                        "success": op.get("success", True),
+                        "model_used": op.get("model_used"),
+                        "error": op.get("error"),
+                    }
+                    param_spec = {
+                        "page_no": op["page_no"],
+                        "parameter": pname,
+                        **spec_params_by_name[pname],
+                    }
+                    row = evaluate_field(extraction_result, param_spec)
+                    row["operation_id"] = op["operation_id"]
+                    all_param_rows.append(row)
 
-        if param_rows:
-            st.session_state["param_rows"] = param_rows
-            with st.spinner("Saving parameter observations..."):
-                save_parameter_observations(batch_number, param_rows)
-
-        # Time-series logs (Table-1 / Table-2), only for operations with a spec entry
-        for spec_op in spec["operations"]:
-            ts_spec = spec_op.get("time_series_log")
-            if not ts_spec:
-                continue
-            with st.spinner(f"Reading {ts_spec['table_name']}..."):
+            # Time-series logs (Table-1 / Table-2) - only worth checking
+            # this page against ops whose spec page_no matches, so we're
+            # not re-asking the model to find a table on every page.
+            for spec_op in spec["operations"]:
+                ts_spec = spec_op.get("time_series_log")
+                if not ts_spec:
+                    continue
                 rows = extract_timeseries_from_page(
                     ts_spec["table_name"], ts_spec.get("value_unit", ""), cleaned_bytes
                 )
-            if rows:
-                save_timeseries_readings(
-                    batch_number, spec_op["operation_id"], ts_spec["table_name"], rows, spec_op["page_no"]
-                )
+                if rows:
+                    save_timeseries_readings(
+                        batch_number, spec_op["operation_id"], ts_spec["table_name"], rows, spec_op["page_no"]
+                    )
+
+        progress.progress(1.0, text="Done.")
+
+        if total_failed_ops:
+            st.error(
+                f"Extraction call failed for {total_failed_ops} operation(s) across "
+                f"{len(pages)} page(s). Results below reflect failed API calls, not "
+                "empty handwriting. Check OPENROUTER_API_KEY in Secrets and your "
+                "OpenRouter free-tier rate limits."
+            )
+            for msg in all_error_messages:
+                st.code(msg)
+
+        if all_param_rows:
+            st.session_state["param_rows"] = all_param_rows
+            save_parameter_observations(batch_number, all_param_rows)
 
 if "param_rows" in st.session_state and st.session_state["param_rows"]:
     st.divider()
