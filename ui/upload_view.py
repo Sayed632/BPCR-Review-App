@@ -49,4 +49,3 @@ def get_bpcr_pages() -> list[tuple[str, bytes]]:
             pages.append(("Camera capture", captured.getvalue()))
 
     return pages
-
