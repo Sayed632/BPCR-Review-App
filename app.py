@@ -89,7 +89,7 @@ if image_bytes:
             st.error(
                 f"Extraction call failed for this page ({len(failed_ops)} operation(s) affected). "
                 "The results below reflect a failed API call, not empty handwriting. "
-                "Check GEMINI_API_KEY in Secrets and your Gemini API quota/limits."
+                "Check OPENROUTER_API_KEY in Secrets and your OpenRouter free-tier rate limits."
             )
             for msg in error_messages:
                 st.code(msg)
