@@ -158,6 +158,51 @@ def save_parameter_observations(batch_number: str, param_rows: list):
         ).execute()
 
 
+def save_master_spec(doc_number: str, version: str, spec: dict):
+    """Saves a confirmed Master BPCR spec so it can be reloaded for
+    future batches without re-uploading/re-parsing. Upserts on
+    (doc_number, version) - saving the same doc/version again overwrites
+    the prior spec (treat that as a deliberate correction, not a new version)."""
+    client = get_client()
+    client.table("master_specs").upsert(
+        {
+            "doc_number": doc_number,
+            "version": version,
+            "product_name": spec.get("product_name"),
+            "spec_json": spec,
+        },
+        on_conflict="doc_number,version",
+    ).execute()
+
+
+def load_master_spec(doc_number: str, version: str) -> dict | None:
+    client = get_client()
+    result = (
+        client.table("master_specs")
+        .select("*")
+        .eq("doc_number", doc_number)
+        .eq("version", version)
+        .execute()
+    )
+    if not result.data:
+        return None
+    return result.data[0]["spec_json"]
+
+
+def list_master_specs() -> list:
+    """Returns [{doc_number, version, product_name}] for every saved
+    spec, most recently updated first, for the "load a saved spec"
+    picker in the UI."""
+    client = get_client()
+    result = (
+        client.table("master_specs")
+        .select("doc_number,version,product_name,updated_at")
+        .order("updated_at", desc=True)
+        .execute()
+    )
+    return result.data
+
+
 def load_all_batches(product_name: str = None) -> list:
     client = get_client()
     query = client.table("batches").select("*")
