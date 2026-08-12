@@ -6,6 +6,7 @@ calls model_router to get a structured reading back.
 
 import json
 from core.model_router import extract_field
+from core.prompt_fragments import SCIENTIFIC_NOTATION_INSTRUCTIONS
 
 
 def _build_prompt(parameter: str, unit: str, expected_type: str) -> str:
@@ -258,6 +259,7 @@ def _build_rich_operations_prompt(operations: list) -> str:
         "control record. For each operation below, extract what is visible on "
         "this page:\n\n"
         f"{op_list}\n\n"
+        f"{SCIENTIFIC_NOTATION_INSTRUCTIONS}\n\n"
         "For each operation return:\n"
         "- operator: handwritten name/initials/signature ('BLANK' or 'ILLEGIBLE' if not readable)\n"
         "- start_time: handwritten start date/time, exactly as written\n"
@@ -344,6 +346,7 @@ def _build_timeseries_prompt(table_name: str, value_unit: str) -> str:
         f"which records periodic readings with columns: Date, Time, Recorded By "
         f"(operator), and a value in unit '{value_unit}'. Transcribe every row "
         f"you can see.\n\n"
+        f"{SCIENTIFIC_NOTATION_INSTRUCTIONS}\n\n"
         "Respond with ONLY a JSON array, one object per row:\n"
         '[{"date": "<value>", "time": "<value>", "recorded_by": "<value>", '
         '"value": "<value>"}]\n'
