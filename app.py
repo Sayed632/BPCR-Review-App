@@ -1,226 +1,251 @@
 """
-app.py
-BPCR Review App - real-case pipeline for multi-material, multi-step
-batch records with conditional branches and repeating log tables.
-
-Flow:
-  1. Upload the Master BPCR (PDF or images) -> parsed into a spec ->
-     human reviews/edits it -> confirms.
-  2. Upload executed BPCR page(s) (PDF or images, one or many) ->
-     each page is reviewed against the confirmed spec.
-  3. ALCOA / chronology / material reconciliation / time-series checks
-     run across everything saved for the batch so far.
+core/storage.py
+Persists batch/operation data to Supabase so ALCOA checks (chronology,
+reconciliation, time-series) work across sessions and pages.
+Updated for the real-BPCR schema: multiple materials per operation,
+start/end time windows, and repeating time-series log rows.
 """
 
-import json
 import streamlit as st
-
-from config.settings import MASTER_SPECS_DIR
-from core.preprocessor import preprocess_page
-from core.extractor import extract_rich_operations_from_page, extract_timeseries_from_page
-from core.comparator import evaluate_field
-from core.chronology_checker import check_chronology
-from core.material_reconciler import reconcile_materials
-from core.timeseries_checker import check_timeseries
-from core.personnel_validator import validate_operations
-from core.storage import (
-    ensure_batch,
-    save_rich_operations,
-    save_timeseries_readings,
-    save_parameter_observations,
-    load_rich_operations,
-    load_timeseries_readings,
-)
-from ui.upload_view import get_bpcr_pages
-from ui.master_spec_view import run_master_bpcr_parse_flow
-from ui.alcoa_view import (
-    show_chronology,
-    show_reconciliation,
-    show_personnel_check,
-    show_timeseries_issues,
-)
-from ui.apqr_view import show_apqr_dashboard
-
-DEMO_SPEC_FILE = "apple_orange_batch.json"
-
-st.set_page_config(page_title="BPCR Review App", layout="wide")
-st.title("BPCR Review App")
-
-mode = st.sidebar.radio("Mode", ["Batch Review", "APQR / Trend Analysis"])
+from supabase import create_client
 
 
-@st.cache_data
-def load_demo_spec(filename: str) -> dict:
-    with open(f"{MASTER_SPECS_DIR}/{filename}") as f:
-        return json.load(f)
+@st.cache_resource
+def get_client():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 
-# --- Spec source: a freshly-uploaded/confirmed Master BPCR takes
-# priority; otherwise fall back to the bundled demo spec so the app
-# stays usable without requiring a fresh upload every session.
-confirmed_spec = run_master_bpcr_parse_flow()
-using_demo_spec = confirmed_spec is None
+def ensure_batch(batch_number: str, product_name: str, spec_version: str = None):
+    client = get_client()
+    client.table("batches").upsert(
+        {"batch_number": batch_number, "product_name": product_name, "spec_version": spec_version},
+        on_conflict="batch_number",
+    ).execute()
 
-if using_demo_spec:
-    st.info(
-        "No Master BPCR confirmed yet - using the bundled demo spec below "
-        "for now. Upload and confirm a Master BPCR above to review your "
-        "own product instead."
+
+def save_rich_operations(batch_number: str, operations: list):
+    """
+    operations: list from extractor.extract_rich_operations_from_page()
+    Saves operator/start/end to `operations`, and each material reading
+    to `operation_materials`.
+    """
+    client = get_client()
+
+    op_rows = [
+        {
+            "batch_number": batch_number,
+            "operation_id": op["operation_id"],
+            "description": op.get("description"),
+            "page_no": op.get("page_no"),
+            "operator": op.get("operator"),
+            "start_time_raw": op.get("start_time"),
+            "end_time_raw": op.get("end_time"),
+            "model_used": op.get("model_used"),
+        }
+        for op in operations
+    ]
+    if op_rows:
+        client.table("operations").upsert(op_rows, on_conflict="batch_number,operation_id").execute()
+
+    material_rows = []
+    for op in operations:
+        for mat in op.get("materials", []):
+            if mat.get("qty_used") in (None, "BLANK"):
+                continue
+            material_rows.append(
+                {
+                    "batch_number": batch_number,
+                    "operation_id": op["operation_id"],
+                    "material": mat["material"],
+                    "qty_used_raw": mat.get("qty_used"),
+                    "page_no": op.get("page_no"),
+                }
+            )
+    if material_rows:
+        client.table("operation_materials").upsert(
+            material_rows, on_conflict="batch_number,operation_id,material"
+        ).execute()
+
+
+def save_timeseries_readings(batch_number: str, operation_id: str, table_name: str, rows: list, page_no: int = None):
+    client = get_client()
+    db_rows = [
+        {
+            "batch_number": batch_number,
+            "operation_id": operation_id,
+            "table_name": table_name,
+            "date_raw": r.get("date"),
+            "time_raw": r.get("time"),
+            "recorded_by": r.get("recorded_by"),
+            "value_raw": r.get("value"),
+            "page_no": page_no,
+        }
+        for r in rows
+    ]
+    if db_rows:
+        client.table("timeseries_readings").insert(db_rows).execute()
+
+
+def load_rich_operations(batch_number: str) -> list:
+    """Returns operations + their materials, in the shape chronology_checker
+    and material_reconciler expect."""
+    client = get_client()
+    op_result = client.table("operations").select("*").eq("batch_number", batch_number).execute()
+    mat_result = client.table("operation_materials").select("*").eq("batch_number", batch_number).execute()
+
+    materials_by_op = {}
+    for row in mat_result.data:
+        materials_by_op.setdefault(row["operation_id"], []).append(
+            {"material": row["material"], "qty_used": row["qty_used_raw"]}
+        )
+
+    return [
+        {
+            "operation_id": row["operation_id"],
+            "description": row.get("description"),
+            "page_no": row.get("page_no"),
+            "operator": row.get("operator"),
+            "start_time": row.get("start_time_raw"),
+            "end_time": row.get("end_time_raw"),
+            "materials": materials_by_op.get(row["operation_id"], []),
+        }
+        for row in op_result.data
+    ]
+
+
+def load_timeseries_readings(batch_number: str, table_name: str = None) -> list:
+    client = get_client()
+    query = client.table("timeseries_readings").select("*").eq("batch_number", batch_number)
+    if table_name:
+        query = query.eq("table_name", table_name)
+    result = query.execute()
+    return [
+        {
+            "date": r.get("date_raw"),
+            "time": r.get("time_raw"),
+            "recorded_by": r.get("recorded_by"),
+            "value": r.get("value_raw"),
+        }
+        for r in result.data
+    ]
+
+
+def save_parameter_observations(batch_number: str, param_rows: list):
+    """
+    param_rows: output rows from comparator.evaluate_field() - persists
+    every parameter reading so it can be trended across batches later
+    (APQR, control charts, deviation-rate reporting, etc.).
+    """
+    client = get_client()
+    db_rows = [
+        {
+            "batch_number": batch_number,
+            "page_no": row.get("page_no"),
+            "parameter": row.get("parameter"),
+            "spec_instruction": row.get("spec_instruction"),
+            "written_value": row.get("written_value"),
+            "status": row.get("status"),
+            "deviation_type": row.get("deviation_type"),
+            "model_used": row.get("model_used"),
+        }
+        for row in param_rows
+    ]
+    if db_rows:
+        client.table("parameter_observations").upsert(
+            db_rows, on_conflict="batch_number,operation_id,parameter"
+        ).execute()
+
+
+def save_master_spec(doc_number: str, version: str, spec: dict):
+    """Saves a confirmed Master BPCR spec so it can be reloaded for
+    future batches without re-uploading/re-parsing. Upserts on
+    (doc_number, version) - saving the same doc/version again overwrites
+    the prior spec (treat that as a deliberate correction, not a new version)."""
+    client = get_client()
+    client.table("master_specs").upsert(
+        {
+            "doc_number": doc_number,
+            "version": version,
+            "product_name": spec.get("product_name"),
+            "spec_json": spec,
+        },
+        on_conflict="doc_number,version",
+    ).execute()
+
+
+def load_master_spec(doc_number: str, version: str) -> dict | None:
+    client = get_client()
+    result = (
+        client.table("master_specs")
+        .select("*")
+        .eq("doc_number", doc_number)
+        .eq("version", version)
+        .execute()
     )
-    spec = load_demo_spec(DEMO_SPEC_FILE)
-else:
-    spec = confirmed_spec
+    if not result.data:
+        return None
+    return result.data[0]["spec_json"]
 
-if mode == "APQR / Trend Analysis":
-    show_apqr_dashboard(spec["product_name"])
-    st.stop()
 
-st.divider()
-st.subheader("Step 2: Executed BPCR")
-st.caption("Upload or photograph the executed (handwritten) BPCR to review against the spec above.")
-st.info(
-    f"Active spec: **{spec['product_name']}** "
-    f"({len(spec['materials'])} materials, {len(spec['operations'])} operations)"
-    + (" — demo spec" if using_demo_spec else "")
-)
+def list_master_specs() -> list:
+    """Returns [{doc_number, version, product_name}] for every saved
+    spec, most recently updated first, for the "load a saved spec"
+    picker in the UI."""
+    client = get_client()
+    result = (
+        client.table("master_specs")
+        .select("doc_number,version,product_name,updated_at")
+        .order("updated_at", desc=True)
+        .execute()
+    )
+    return result.data
 
-batch_number = st.text_input(
-    "Batch Number",
-    placeholder="e.g. B-2026-0142",
-    help="Groups all pages/operations for this batch across sessions.",
-)
 
-if not batch_number:
-    st.warning("Enter a batch number above to begin.")
-    st.stop()
+def load_all_batches(product_name: str = None) -> list:
+    client = get_client()
+    query = client.table("batches").select("*")
+    if product_name:
+        query = query.eq("product_name", product_name)
+    return query.execute().data
 
-pages = get_bpcr_pages()
 
-if pages:
-    with st.expander(f"{len(pages)} page(s) queued", expanded=True):
-        cols = st.columns(min(len(pages), 4))
-        for i, (label, image_bytes) in enumerate(pages):
-            with cols[i % len(cols)]:
-                st.image(image_bytes, caption=label, width=200)
+def load_all_parameter_observations(product_name: str = None) -> list:
+    """
+    Cross-batch pull of every parameter observation - the core data
+    source for APQR trending, control charts, and deviation-rate
+    analysis across a product's batch history.
+    """
+    client = get_client()
+    if product_name:
+        batch_numbers = [b["batch_number"] for b in load_all_batches(product_name)]
+        if not batch_numbers:
+            return []
+        result = (
+            client.table("parameter_observations")
+            .select("*")
+            .in_("batch_number", batch_numbers)
+            .execute()
+        )
+    else:
+        result = client.table("parameter_observations").select("*").execute()
+    return result.data
 
-    if st.button("Run Review", type="primary"):
-        all_param_rows = []
-        total_failed_ops = 0
-        all_error_messages = set()
 
-        progress = st.progress(0.0, text="Starting...")
-
-        for page_index, (label, image_bytes) in enumerate(pages):
-            progress.progress(
-                page_index / len(pages), text=f"Processing {label} ({page_index + 1}/{len(pages)})..."
-            )
-
-            cleaned_bytes = preprocess_page(image_bytes)
-            rich_ops = extract_rich_operations_from_page(spec["operations"], cleaned_bytes)
-
-            failed_ops = [op for op in rich_ops if not op.get("success", True)]
-            total_failed_ops += len(failed_ops)
-            for op in failed_ops:
-                if op.get("error"):
-                    all_error_messages.add(op["error"])
-
-            # Only persist operations that actually have data on this page
-            ops_with_data = [
-                op
-                for op in rich_ops
-                if op.get("operator") not in (None, "BLANK")
-                or op.get("start_time") not in (None, "BLANK")
-            ]
-
-            ensure_batch(batch_number, spec["product_name"], spec.get("bpcr_version"))
-            if ops_with_data:
-                save_rich_operations(batch_number, ops_with_data)
-
-            for op in rich_ops:
-                spec_op = next((o for o in spec["operations"] if o["operation_id"] == op["operation_id"]), None)
-                if not spec_op:
-                    continue
-                spec_params_by_name = {p["parameter"]: p for p in spec_op.get("parameters", [])}
-                for extracted_param in op.get("parameters", []):
-                    pname = extracted_param.get("parameter")
-                    if pname not in spec_params_by_name:
-                        continue
-                    extraction_result = {
-                        "written_value": extracted_param.get("written_value"),
-                        "success": op.get("success", True),
-                        "model_used": op.get("model_used"),
-                        "error": op.get("error"),
-                    }
-                    param_spec = {
-                        "page_no": op["page_no"],
-                        "parameter": pname,
-                        **spec_params_by_name[pname],
-                    }
-                    row = evaluate_field(extraction_result, param_spec)
-                    row["operation_id"] = op["operation_id"]
-                    all_param_rows.append(row)
-
-            # Time-series logs (Table-1 / Table-2) - only worth checking
-            # this page against ops whose spec page_no matches, so we're
-            # not re-asking the model to find a table on every page.
-            for spec_op in spec["operations"]:
-                ts_spec = spec_op.get("time_series_log")
-                if not ts_spec:
-                    continue
-                rows = extract_timeseries_from_page(
-                    ts_spec["table_name"], ts_spec.get("value_unit", ""), cleaned_bytes
-                )
-                if rows:
-                    save_timeseries_readings(
-                        batch_number, spec_op["operation_id"], ts_spec["table_name"], rows, spec_op["page_no"]
-                    )
-
-        progress.progress(1.0, text="Done.")
-
-        if total_failed_ops:
-            st.error(
-                f"Extraction call failed for {total_failed_ops} operation(s) across "
-                f"{len(pages)} page(s). Results below reflect failed API calls, not "
-                "empty handwriting. Check OPENROUTER_API_KEY in Secrets and your "
-                "OpenRouter free-tier rate limits."
-            )
-            for msg in all_error_messages:
-                st.code(msg)
-
-        if all_param_rows:
-            st.session_state["param_rows"] = all_param_rows
-            save_parameter_observations(batch_number, all_param_rows)
-
-if "param_rows" in st.session_state and st.session_state["param_rows"]:
-    st.divider()
-    st.header("Parameter Observations")
-    import pandas as pd
-    st.dataframe(pd.DataFrame(st.session_state["param_rows"]), use_container_width=True)
-
-all_ops = load_rich_operations(batch_number)
-
-if all_ops:
-    st.divider()
-    st.header("ALCOA Data Integrity Checks")
-    st.caption(f"Based on {len(all_ops)} operation(s) saved for batch **{batch_number}**.")
-
-    chronology_result = check_chronology(all_ops)
-    show_chronology(chronology_result)
-
-    reconciliation_result = reconcile_materials(all_ops, spec["materials"])
-    show_reconciliation(reconciliation_result)
-
-    personnel_results = validate_operations(all_ops, spec.get("personnel", []))
-    show_personnel_check(personnel_results)
-
-    st.divider()
-    st.header("Time-Series Log Checks")
-    for spec_op in spec["operations"]:
-        ts_spec = spec_op.get("time_series_log")
-        if not ts_spec:
-            continue
-        rows = load_timeseries_readings(batch_number, ts_spec["table_name"])
-        if not rows:
-            continue
-        ts_result = check_timeseries(rows, ts_spec, operation_id=spec_op["operation_id"])
-        show_timeseries_issues(spec_op["operation_id"], ts_spec["table_name"], ts_result)
+def load_all_operation_materials(product_name: str = None) -> list:
+    """Cross-batch material usage - feeds material reconciliation trending."""
+    client = get_client()
+    if product_name:
+        batch_numbers = [b["batch_number"] for b in load_all_batches(product_name)]
+        if not batch_numbers:
+            return []
+        result = (
+            client.table("operation_materials")
+            .select("*")
+            .in_("batch_number", batch_numbers)
+            .execute()
+        )
+    else:
+        result = client.table("operation_materials").select("*").execute()
+    return result.data
