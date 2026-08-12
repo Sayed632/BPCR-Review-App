@@ -14,6 +14,7 @@ is worse than a misread executed value.
 
 import json
 from core.model_router import extract_field
+from core.prompt_fragments import SCIENTIFIC_NOTATION_INSTRUCTIONS
 
 REQUIRED_TOP_LEVEL_KEYS = ["product_name", "bpcr_version", "personnel", "materials", "operations"]
 
@@ -27,6 +28,7 @@ def _build_master_bpcr_prompt(page_number: int) -> str:
         f"{page_number} of a multi-page document, so many sections will "
         "be empty on any given page - that's expected, just leave those "
         "as empty arrays/null.\n\n"
+        f"{SCIENTIFIC_NOTATION_INSTRUCTIONS}\n\n"
         "Extract into exactly this JSON shape:\n"
         "{\n"
         '  "product_name": "<string or null if not on this page>",\n'
@@ -66,6 +68,16 @@ def _build_master_bpcr_prompt(page_number: int) -> str:
         "THIS page. Leave arrays empty if this page has none.\n"
         "- Do not invent spec_min/spec_max values - only extract numbers "
         "that are actually printed. Use null if not specified.\n"
+        "- IMPORTANT: many specs are printed as a nominal value plus a "
+        "tolerance using a ± symbol, e.g. 'RPM 10±5' or '87±2°C'. When you "
+        "see this notation, you MUST convert it into a proper range: "
+        "spec_min = nominal - tolerance, spec_max = nominal + tolerance. "
+        "For 'RPM 10±5' that means spec_min=5 and spec_max=15 - NOT "
+        "spec_min=10 and spec_max=10. Never repeat the nominal value for "
+        "both spec_min and spec_max unless the printed spec truly has zero "
+        "tolerance.\n"
+        "- If a spec is printed as an explicit range already (e.g. "
+        "'85-90 degC'), use those two numbers directly as spec_min/spec_max.\n"
         "- Respond with ONLY the raw JSON object above, filled in. No "
         "markdown code fences, no explanation text, no extra commentary."
     )
@@ -156,6 +168,7 @@ def merge_spec_fragments(fragments: list[dict]) -> dict:
             if key not in materials_by_name:
                 materials_by_name[key] = mat
             else:
+                # fill in any fields the first occurrence was missing
                 for k, v in mat.items():
                     if materials_by_name[key].get(k) in (None, "") and v not in (None, ""):
                         materials_by_name[key][k] = v
@@ -167,6 +180,9 @@ def merge_spec_fragments(fragments: list[dict]) -> dict:
             if op_id not in operations_by_id:
                 operations_by_id[op_id] = op
             else:
+                # merge materials/parameters lists rather than overwrite,
+                # in case the same operation's fields were split oddly
+                # across a page boundary
                 existing = operations_by_id[op_id]
                 existing.setdefault("materials_used", [])
                 existing.setdefault("parameters", [])
