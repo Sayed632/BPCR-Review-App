@@ -24,7 +24,7 @@ TIMESTAMP_FORMATS = [
 ]
 
 
-def _parse_timestamp(raw: str):
+def parse_timestamp(raw: str):
     if not raw or str(raw).upper() in ("BLANK", "ILLEGIBLE", "NONE"):
         return None
     raw = str(raw).strip()
@@ -34,6 +34,10 @@ def _parse_timestamp(raw: str):
         except ValueError:
             continue
     return None
+
+
+# kept for internal backward-compatible calls within this module
+_parse_timestamp = parse_timestamp
 
 
 def _normalize_operator(name: str) -> str:
